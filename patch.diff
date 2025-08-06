@@ -1,188 +1,23 @@
-diff --git a/app/app.go b/app/app.go
-index 6115886..781600c 100644
---- a/app/app.go
-+++ b/app/app.go
-@@ -33,58 +33,52 @@
- }
- 
- // Process выполняет основную логику согласно требованиям.
--func (a *App) Process(ctx context.Context) {
-+func (a *App) Process(ctx context.Context) (Result, error) {
- 	log.Printf("Starting processing for rootUrl: %s\n", a.rootUrl)
- 
- 	// 1. Открыть страницу, переданную в rootUrl.
- 	if err := a.c.OpenURL(ctx, a.rootUrl); err != nil {
--		log.Fatalf("Failed to open root URL: %v", err)
--		return
-+		return Result{}, fmt.Errorf("failed to open root URL: %w", err)
- 	}
- 	if err := a.c.WaitLoaded(ctx); err != nil {
--		log.Fatalf("Failed to wait for root URL to load: %v", err)
--		return
-+		return Result{}, fmt.Errorf("failed to wait for root URL to load: %w", err)
- 	}
- 
- 	// 2. Сохранить doc_name из текста.
- 	docNameSelector := `body > div.content.document-page > section > div.external-block > div.external-block__content > div.document-page__title`
- 	jsGetDocName := fmt.Sprintf(`document.querySelector('%s').innerText`, docNameSelector)
- 
- 	docName, err := a.c.GetString(ctx, jsGetDocName)
- 	if err != nil {
--		log.Fatalf("Failed to get document name using selector '%s': %v", docNameSelector, err)
--		return
-+		return Result{}, fmt.Errorf("failed to get document name using selector '%s': %w", docNameSelector, err)
- 	}
- 	docName = strings.TrimSpace(docName)
- 	log.Printf("Found document name: '%s'\n", docName)
- 
- 	// 3. Перейти по ссылке из первого элемента оглавления.
- 	firstTocLinkSelector := `body > div.content.document-page > section > div.external-block > div.external-block__content > div.document-page__toc > ul > li:nth-child(1) > a`
- 	if err := a.c.Click(ctx, firstTocLinkSelector); err != nil {
--		log.Fatalf("Failed to click first TOC link using selector '%s': %v", firstTocLinkSelector, err)
--		return
-+		return Result{}, fmt.Errorf("failed to click first TOC link using selector '%s': %w", firstTocLinkSelector, err)
- 	}
- 	log.Println("Clicked the first link in TOC.")
- 	if err := a.c.WaitLoaded(ctx); err != nil {
--		log.Fatalf("Failed to wait for new page to load after click: %v", err)
--		return
-+		return Result{}, fmt.Errorf("failed to wait for new page to load after click: %w", err)
- 	}
- 	log.Println("New page loaded.")
- 
- 	// 4. Получить URL текущей страницы после полной загрузки.
- 	secURL, err := a.c.GetString(ctx, `window.location.href`)
- 	if err != nil {
--		log.Fatalf("Failed to get current URL: %v", err)
-+		return Result{}, fmt.Errorf("failed to get current URL: %w", err)
- 	}
- 
- 	// 5. Возвращаем JSON.
- 	if secURL != "" {
--		result := Result{
-+		return Result{
- 			RootURL: a.rootUrl,
- 			DocName: docName,
- 			SecURL:  secURL,
--		}
--		jsonOutput, err := json.MarshalIndent(result, "", "  ")
--		if err != nil {
--			log.Fatalf("Failed to marshal result to JSON: %v", err)
--		}
--		fmt.Println(string(jsonOutput)) // Выводим JSON в stdout
-+		}, nil
- 	} else {
--		log.Println("Could not determine the secondary URL.")
-+		return Result{}, fmt.Errorf("could not determine the secondary URL")
- 	}
- }
 diff --git a/cmd/main.go b/cmd/main.go
-index 867332c..940003b 100644
+index 940003b..a2a265e 100644
 --- a/cmd/main.go
 +++ b/cmd/main.go
-@@ -2,71 +2,81 @@
+@@ -40,14 +40,14 @@
+ }
  
- import (
- 	"context"
-+	"encoding/json"
- 	"flag"
- 	"fmt"
- 	"log"
-+	"net/http"
- 	"time"
- 
- 	"github.com/chromedp/chromedp"
- 	chrwr "github.com/i-b8o/chromedp_wrapper"
- 	"github.com/marketconnect/cons_tool_server/app"
- )
- 
--const usage = `Usage:
--parser -u <url> [-headless=false] [-help]
--	
--Options:
---u          Required, the document's root url to start processing
---headless   Optional, run browser in headless mode (default: true). Use -headless=false to show browser window.
---help       Optional, Prints this message
-- `
--
- func main() {
--	rootUrl := flag.String("u", "", "start url")
- 	headless := flag.Bool("headless", true, "run browser in headless mode")
--	help := flag.Bool("help", false, "Optional, prints usage info")
- 	flag.Parse()
- 
--	if *help {
--		fmt.Println(usage)
--		return
-+	if !*headless {
-+		log.Fatal("This application must be run in headless mode to start the web service.")
+ func handleRequest(w http.ResponseWriter, r *http.Request) {
+-	rootUrl := r.URL.Query().Get("rootUrl")
+-	if rootUrl == "" {
+-		http.Error(w, `{"error": "rootUrl query parameter is required"}`, http.StatusBadRequest)
++	number := r.URL.Query().Get("number")
++	if number == "" {
++		http.Error(w, `{"error": "number query parameter is required"}`, http.StatusBadRequest)
+ 		return
  	}
  
--	if *rootUrl == "" {
--		log.Fatal("Error: rootUrl is empty. Use -u flag to provide it.\n", usage)
--		return
-+	http.HandleFunc("/", handleRequest)
-+
-+	log.Println("Server starting on port 8080...")
-+	if err := http.ListenAndServe(":8080", nil); err != nil {
-+		log.Fatalf("Failed to start server: %v", err)
-+	}
-+}
-+
-+func handleRequest(w http.ResponseWriter, r *http.Request) {
-+	rootUrl := r.URL.Query().Get("rootUrl")
-+	if rootUrl == "" {
-+		http.Error(w, `{"error": "rootUrl query parameter is required"}`, http.StatusBadRequest)
-+		return
- 	}
- 
--	// cfg := config.GetConfig() // Строка удалена, так как cfg не используется
-+	log.Printf("Processing request for rootUrl: %s", rootUrl)
+-	log.Printf("Processing request for rootUrl: %s", rootUrl)
++	rootUrl := fmt.Sprintf("https://www.consultant.ru/document/cons_doc_LAW_%s/", number)
++	log.Printf("Processing request for number: %s, URL: %s", number, rootUrl)
  
  	opts := append(chromedp.DefaultExecAllocatorOptions[:],
--		chromedp.Flag("headless", *headless),
-+		chromedp.Flag("headless", true),
- 		chromedp.Flag("disable-gpu", true),
- 		chromedp.Flag("enable-automation", false),
- 		chromedp.Flag("disable-extensions", false),
-+		chromedp.NoSandbox,
-+		chromedp.Flag("disable-dev-shm-usage", true),
- 	)
- 
- 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
- 	defer cancel()
- 
- 	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
- 	defer cancel()
- 
- 	parseCtx, parseCancel := context.WithTimeout(ctx, 5*time.Minute)
- 	defer parseCancel()
- 
--	log.Println("Chrome wrapper initialisation")
- 	c := chrwr.NewChromeWrapper()
- 	c.SetTimeout(120)
- 
--	// Исправлен вызов NewApp: убран аргумент cfg
--	a, err := app.NewApp(c, *rootUrl)
-+	a, err := app.NewApp(c, rootUrl)
- 	if err != nil {
--		log.Fatalf("Failed to create app: %v", err)
-+		log.Printf("Error creating app: %v", err)
-+		http.Error(w, fmt.Sprintf(`{"error": "failed to create app: %v"}`, err), http.StatusInternalServerError)
-+		return
- 	}
- 
--	log.Println("Running Application...")
-+	result, err := a.Process(parseCtx)
-+	if err != nil {
-+		log.Printf("Error processing request: %v", err)
-+		http.Error(w, fmt.Sprintf(`{"error": "failed to process request: %v"}`, err), http.StatusInternalServerError)
-+		return
-+	}
- 
--	a.Process(parseCtx)
-+	w.Header().Set("Content-Type", "application/json")
-+	if err := json.NewEncoder(w).Encode(result); err != nil {
-+		log.Printf("Error encoding response: %v", err)
-+	}
- }
+ 		chromedp.Flag("headless", true),

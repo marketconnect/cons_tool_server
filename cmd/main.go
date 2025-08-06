@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -12,38 +14,39 @@ import (
 	"github.com/marketconnect/cons_tool_server/app"
 )
 
-const usage = `Usage:
-parser -u <url> [-headless=false] [-help]
-	
-Options:
--u          Required, the document's root url to start processing
--headless   Optional, run browser in headless mode (default: true). Use -headless=false to show browser window.
--help       Optional, Prints this message
- `
-
 func main() {
-	rootUrl := flag.String("u", "", "start url")
 	headless := flag.Bool("headless", true, "run browser in headless mode")
-	help := flag.Bool("help", false, "Optional, prints usage info")
 	flag.Parse()
 
-	if *help {
-		fmt.Println(usage)
+	if !*headless {
+		log.Fatal("This application must be run in headless mode to start the web service.")
+	}
+
+	http.HandleFunc("/", handleRequest)
+
+	log.Println("Server starting on port 8080...")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	number := r.URL.Query().Get("number")
+	if number == "" {
+		http.Error(w, `{"error": "number query parameter is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	if *rootUrl == "" {
-		log.Fatal("Error: rootUrl is empty. Use -u flag to provide it.\n", usage)
-		return
-	}
-
-	// cfg := config.GetConfig() // Строка удалена, так как cfg не используется
+	rootUrl := fmt.Sprintf("https://www.consultant.ru/document/cons_doc_LAW_%s/", number)
+	log.Printf("Processing request for number: %s, URL: %s", number, rootUrl)
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", *headless),
+		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-extensions", false),
+		chromedp.NoSandbox,
+		chromedp.Flag("disable-dev-shm-usage", true),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -55,17 +58,25 @@ func main() {
 	parseCtx, parseCancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer parseCancel()
 
-	log.Println("Chrome wrapper initialisation")
 	c := chrwr.NewChromeWrapper()
 	c.SetTimeout(120)
 
-	// Исправлен вызов NewApp: убран аргумент cfg
-	a, err := app.NewApp(c, *rootUrl)
+	a, err := app.NewApp(c, rootUrl)
 	if err != nil {
-		log.Fatalf("Failed to create app: %v", err)
+		log.Printf("Error creating app: %v", err)
+		http.Error(w, fmt.Sprintf(`{"error": "failed to create app: %v"}`, err), http.StatusInternalServerError)
+		return
 	}
 
-	log.Println("Running Application...")
+	result, err := a.Process(parseCtx)
+	if err != nil {
+		log.Printf("Error processing request: %v", err)
+		http.Error(w, fmt.Sprintf(`{"error": "failed to process request: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
 
-	a.Process(parseCtx)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }

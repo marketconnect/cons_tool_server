@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -40,17 +39,15 @@ func NewApp(c *chrwr.Chrome, rootUrl string) (App, error) {
 }
 
 // Process выполняет основную логику согласно требованиям.
-func (a *App) Process(ctx context.Context) {
+func (a *App) Process(ctx context.Context) (Result, error) {
 	log.Printf("Starting processing for rootUrl: %s\n", a.rootUrl)
 
 	// 1. Открыть страницу, переданную в rootUrl.
 	if err := a.c.OpenURL(ctx, a.rootUrl); err != nil {
-		log.Fatalf("Failed to open root URL: %v", err)
-		return
+		return Result{}, fmt.Errorf("failed to open root URL: %w", err)
 	}
 	if err := a.c.WaitLoaded(ctx); err != nil {
-		log.Fatalf("Failed to wait for root URL to load: %v", err)
-		return
+		return Result{}, fmt.Errorf("failed to wait for root URL to load: %w", err)
 	}
 
 	// 2. Сохранить doc_name из текста.
@@ -59,8 +56,7 @@ func (a *App) Process(ctx context.Context) {
 
 	docName, err := a.c.GetString(ctx, jsGetDocName)
 	if err != nil {
-		log.Fatalf("Failed to get document name using selector '%s': %v", docNameSelector, err)
-		return
+		return Result{}, fmt.Errorf("failed to get document name using selector '%s': %w", docNameSelector, err)
 	}
 	docName = strings.TrimSpace(docName)
 	log.Printf("Found document name: '%s'\n", docName)
@@ -68,36 +64,30 @@ func (a *App) Process(ctx context.Context) {
 	// 3. Перейти по ссылке из первого элемента оглавления.
 	firstTocLinkSelector := `body > div.content.document-page > section > div.external-block > div.external-block__content > div.document-page__toc > ul > li:nth-child(1) > a`
 	if err := a.c.Click(ctx, firstTocLinkSelector); err != nil {
-		log.Fatalf("Failed to click first TOC link using selector '%s': %v", firstTocLinkSelector, err)
-		return
+		return Result{}, fmt.Errorf("failed to click first TOC link using selector '%s': %w", firstTocLinkSelector, err)
 	}
 	log.Println("Clicked the first link in TOC.")
 	if err := a.c.WaitLoaded(ctx); err != nil {
-		log.Fatalf("Failed to wait for new page to load after click: %v", err)
-		return
+		return Result{}, fmt.Errorf("failed to wait for new page to load after click: %w", err)
 	}
 	log.Println("New page loaded.")
 
 	// 4. Получить URL текущей страницы после полной загрузки.
 	secURL, err := a.c.GetString(ctx, `window.location.href`)
 	if err != nil {
-		log.Fatalf("Failed to get current URL: %v", err)
+		return Result{}, fmt.Errorf("failed to get current URL: %w", err)
 	}
 
 	// 5. Возвращаем JSON.
 	if secURL != "" {
-		result := Result{
+		return Result{
 			RootURL: a.rootUrl,
 			DocName: docName,
 			SecURL:  secURL,
-		}
-		jsonOutput, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			log.Fatalf("Failed to marshal result to JSON: %v", err)
-		}
-		fmt.Println(string(jsonOutput)) // Выводим JSON в stdout
+		}, nil
 	} else {
-		log.Println("Could not determine the secondary URL.")
+		return Result{}, fmt.Errorf("could not determine the secondary URL")
 	}
 }
+
 
